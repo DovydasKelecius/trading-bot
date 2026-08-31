@@ -29,6 +29,7 @@ from core.data_ingestion import (
 )
 from core.signals.day_trade import generate_signals_batch as day_signals_batch
 from core.signals.swing_trade import generate_signals_batch as swing_signals_batch
+from core.signals.oscillation import generate_signals_batch as oscillation_signals_batch
 from core.order_executor import execute_entry, execute_exit, close_all_by_strategy, close_trade_by_id
 from core.risk_manager import update_trailing_stop
 from core.sentiment import adjust_signal_with_sentiment, get_sentiment
@@ -38,6 +39,7 @@ from core.alerts import (
 from db.database import get_db, log_heartbeat
 from db.models import Trade, EquityHistory
 import config
+from core.config_manager import config_mgr
 
 # Track scan cycle count for market context logging
 _day_scan_cycle = 0
@@ -270,7 +272,13 @@ def pre_market_setup():
                 logger.info(f"Loaded {len(df)} daily bars for {symbol}")
 
         # Generate swing signals for the day
-        swing_signals = swing_signals_batch(config.SWING_TRADE_WATCHLIST, daily_cache)
+        swing_params = config_mgr.get_all()
+        signal_engine = oscillation_signals_batch if swing_params.get("SWING_STRATEGY_MODE") == "oscillation" else swing_signals_batch
+        swing_signals = signal_engine(
+            config_mgr.get('SWING_TRADE_WATCHLIST', config.SWING_TRADE_WATCHLIST),
+            daily_cache,
+            params=swing_params,
+        )
         buy_signals = [s for s in swing_signals if s["signal"] == "buy"]
 
         log_heartbeat(
@@ -453,7 +461,9 @@ def swing_trade_scan():
             if df is not None:
                 daily_cache[symbol] = df
 
-        signals = swing_signals_batch(config.SWING_TRADE_WATCHLIST, daily_cache)
+        params = config_mgr.get_all()
+        signal_engine = oscillation_signals_batch if params.get("SWING_STRATEGY_MODE") == "oscillation" else swing_signals_batch
+        signals = signal_engine(config_mgr.get('SWING_TRADE_WATCHLIST', config.SWING_TRADE_WATCHLIST), daily_cache, params=params)
 
         # Apply sentiment filter (Phase 2)
         if config.ENABLE_SENTIMENT:
@@ -511,7 +521,7 @@ def swing_trade_scan():
                     if "atr" in df.columns and not df.empty:
                         atr = float(df.iloc[-1]["atr"])
                         current_price = float(df.iloc[-1]["close"])
-                        new_stop = update_trailing_stop(trade, current_price, atr)
+                        new_stop = update_trailing_stop(trade, current_price, atr, params=params)
                         if new_stop:
                             trade.stop_loss = new_stop
 

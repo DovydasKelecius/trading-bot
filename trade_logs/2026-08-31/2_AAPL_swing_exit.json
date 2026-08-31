@@ -1,0 +1,24 @@
+{
+  "meta": {
+    "trade_id": 2,
+    "symbol": "AAPL",
+    "strategy_type": "swing",
+    "side": "buy",
+    "note": "Standalone exit log \u2014 entry log not found (may be from a previous day)",
+    "log_version": "1.0"
+  },
+  "exit_snapshot": {
+    "exit_timestamp_utc": "2026-08-31T18:41:09.120584",
+    "exit_price": 310.87,
+    "exit_reason": "manual_close",
+    "exit_status": "closed",
+    "pnl": -0.03,
+    "pnl_pct": -0.0099,
+    "shares": 1,
+    "entry_price": 310.9009,
+    "hold_duration_seconds": 234.457617,
+    "hold_duration_human": "0:03:54.457617",
+    "exit_intraday_indicators": null,
+    "exit_daily_indicators": null
+  }
+}

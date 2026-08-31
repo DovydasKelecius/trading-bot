@@ -32,7 +32,8 @@ from config import (
 
 logger = logging.getLogger(__name__)
 
-def generate_signal(symbol: str, daily_df: Optional[pd.DataFrame] = None) -> Dict[str, Any]:
+def generate_signal(symbol: str, daily_df: Optional[pd.DataFrame] = None, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    p = params or {}
     """
     Generate a swing trade signal for a symbol based on structure rules.
     """
@@ -52,22 +53,22 @@ def generate_signal(symbol: str, daily_df: Optional[pd.DataFrame] = None) -> Dic
     if daily_df is None:
         daily_df = get_daily_data(symbol, limit=250)
 
-    min_bars = SWING_STRUCTURE_LOOKBACK + 5
+    min_bars = p.get('SWING_STRUCTURE_LOOKBACK', SWING_STRUCTURE_LOOKBACK) + 5
     if daily_df is None or len(daily_df) < min_bars:
         result["reason"] = f"Insufficient daily data (need {min_bars} bars)"
         return result
 
     # Identify primary SMA columns
-    sma_fast_col = f"sma_{SWING_SMA_FAST}"
-    sma_slow_col = f"sma_{SWING_SMA_SLOW}"
+    sma_fast_col = f"sma_{p.get('SWING_SMA_FAST', SWING_SMA_FAST)}"
+    sma_slow_col = f"sma_{p.get('SWING_SMA_SLOW', SWING_SMA_SLOW)}"
     
     # Fallback to adaptive if SMA200 missing
-    if SWING_USE_ADAPTIVE_MA and (sma_slow_col not in daily_df.columns or pd.isna(daily_df.iloc[-1].get(sma_slow_col))):
-        sma_fast_col = f"sma_{SWING_SMA_ADAPTIVE_FAST}"
-        sma_slow_col = f"sma_{SWING_SMA_FAST}"
+    if p.get('SWING_USE_ADAPTIVE_MA', SWING_USE_ADAPTIVE_MA) and (sma_slow_col not in daily_df.columns or pd.isna(daily_df.iloc[-1].get(sma_slow_col))):
+        sma_fast_col = f"sma_{p.get('SWING_SMA_ADAPTIVE_FAST', SWING_SMA_ADAPTIVE_FAST)}"
+        sma_slow_col = f"sma_{p.get('SWING_SMA_FAST', SWING_SMA_FAST)}"
 
-    ema_fast_col = f"ema_{SWING_EMA_FAST}"
-    ema_slow_col = f"ema_{SWING_EMA_SLOW}"
+    ema_fast_col = f"ema_{p.get('SWING_EMA_FAST', SWING_EMA_FAST)}"
+    ema_slow_col = f"ema_{p.get('SWING_EMA_SLOW', SWING_EMA_SLOW)}"
 
     # Check required indicators
     for col in [ema_fast_col, ema_slow_col, sma_fast_col, "atr", "rsi", "volume_avg_20"]:
@@ -117,7 +118,7 @@ def generate_signal(symbol: str, daily_df: Optional[pd.DataFrame] = None) -> Dic
 
     # ── 3. Find Structure Levels ──
     # Look back over recent bars (excluding today) to find recent swing extremes
-    recent_history = daily_df.iloc[-SWING_STRUCTURE_LOOKBACK:-1]
+    recent_history = daily_df.iloc[-p.get('SWING_STRUCTURE_LOOKBACK', SWING_STRUCTURE_LOOKBACK):-1]
     swing_low = float(recent_history["low"].min())
     swing_high = float(recent_history["high"].max())
 
@@ -126,9 +127,9 @@ def generate_signal(symbol: str, daily_df: Optional[pd.DataFrame] = None) -> Dic
     primary_resistance = min(sma_fast, swing_high)
 
     # ── 4. Check Long Setup ──
-    if bullish_bias and SWING_RSI_LONG_MIN <= rsi <= SWING_RSI_LONG_MAX:
+    if bullish_bias and p.get('SWING_RSI_LONG_MIN', SWING_RSI_LONG_MIN) <= rsi <= p.get('SWING_RSI_LONG_MAX', SWING_RSI_LONG_MAX):
         # Are we near support?
-        if current_price <= primary_support * (1 + SWING_PROXIMITY_PCT) and current_price >= primary_support * (1 - SWING_PROXIMITY_PCT):
+        if current_price <= primary_support * (1 + p.get('SWING_PROXIMITY_PCT', SWING_PROXIMITY_PCT)) and current_price >= primary_support * (1 - p.get('SWING_PROXIMITY_PCT', SWING_PROXIMITY_PCT)):
             
             # Retest Protections
             is_valid_retest = True
@@ -139,22 +140,22 @@ def generate_signal(symbol: str, daily_df: Optional[pd.DataFrame] = None) -> Dic
             lower_wick = min(latest["open"], latest["close"]) - latest["low"]
             wick_pct = (lower_wick / daily_range) if daily_range > 0 else 0
             
-            if wick_pct < SWING_RETEST_MIN_WICK_PCT_LONG:
+            if wick_pct < p.get('SWING_RETEST_MIN_WICK_PCT_LONG', SWING_RETEST_MIN_WICK_PCT_LONG):
                 is_valid_retest = False
-                rejection_reason.append(f"Wick too small ({wick_pct*100:.1f}% < {SWING_RETEST_MIN_WICK_PCT_LONG*100:.1f}%)")
+                rejection_reason.append(f"Wick too small ({wick_pct*100:.1f}% < {p.get('SWING_RETEST_MIN_WICK_PCT_LONG', SWING_RETEST_MIN_WICK_PCT_LONG)*100:.1f}%)")
                 
             # Close check
-            if SWING_RETEST_REQUIRE_CLOSE_ABOVE_SUPPORT and current_price < primary_support:
+            if p.get('SWING_RETEST_REQUIRE_CLOSE_ABOVE_SUPPORT', SWING_RETEST_REQUIRE_CLOSE_ABOVE_SUPPORT) and current_price < primary_support:
                 is_valid_retest = False
                 rejection_reason.append(f"Closed below support (${current_price:.2f} < ${primary_support:.2f})")
                 
             # Higher low check
-            if SWING_RETEST_REQUIRE_HIGHER_LOW and latest["low"] <= prev["low"]:
+            if p.get('SWING_RETEST_REQUIRE_HIGHER_LOW', SWING_RETEST_REQUIRE_HIGHER_LOW) and latest["low"] <= prev["low"]:
                 is_valid_retest = False
                 rejection_reason.append("Did not form a higher low")
                 
             # Volume check
-            if SWING_RETEST_VOLUME_MULTIPLIER_LONG > 0 and vol < vol_avg * SWING_RETEST_VOLUME_MULTIPLIER_LONG:
+            if p.get('SWING_RETEST_VOLUME_MULTIPLIER_LONG', SWING_RETEST_VOLUME_MULTIPLIER_LONG) > 0 and vol < vol_avg * p.get('SWING_RETEST_VOLUME_MULTIPLIER_LONG', SWING_RETEST_VOLUME_MULTIPLIER_LONG):
                 is_valid_retest = False
                 rejection_reason.append("Insufficient volume spike")
 
@@ -162,15 +163,15 @@ def generate_signal(symbol: str, daily_df: Optional[pd.DataFrame] = None) -> Dic
                 result["signal"] = "buy"
                 result["entry_type"] = "support_retest"
                 # Stop loss placed slightly below the swing low / support
-                result["stop_loss"] = round(primary_support - (atr * SWING_STOP_MULTIPLIER), 2)
+                result["stop_loss"] = round(primary_support - (atr * p.get('SWING_STOP_MULTIPLIER', SWING_STOP_MULTIPLIER)), 2)
                 # Take profit targeting RR 
                 risk = abs(current_price - result["stop_loss"])
-                result["take_profit"] = round(current_price + (risk * SWING_PROFIT_R_MAX), 2)
+                result["take_profit"] = round(current_price + (risk * p.get('SWING_PROFIT_R_MAX', SWING_PROFIT_R_MAX)), 2)
                 
                 result["reason"] = (
                     f"Long Setup: Valid retest at support (${primary_support:.2f}). "
                     f"Wick: {wick_pct*100:.1f}%, RSI: {rsi:.1f}. "
-                    f"Targeting {SWING_PROFIT_R_MAX}R."
+                    f"Targeting {p.get('SWING_PROFIT_R_MAX', SWING_PROFIT_R_MAX)}R."
                 )
                 logger.info(f"[{symbol}] BUY signal: {result['reason']}")
                 return result
@@ -179,9 +180,9 @@ def generate_signal(symbol: str, daily_df: Optional[pd.DataFrame] = None) -> Dic
 
 
     # ── 5. Check Short Setup ──
-    if bearish_bias and SWING_RSI_SHORT_MIN <= rsi <= SWING_RSI_SHORT_MAX:
+    if bearish_bias and p.get('SWING_RSI_SHORT_MIN', SWING_RSI_SHORT_MIN) <= rsi <= p.get('SWING_RSI_SHORT_MAX', SWING_RSI_SHORT_MAX):
         # Are we near resistance?
-        if current_price >= primary_resistance * (1 - SWING_PROXIMITY_PCT) and current_price <= primary_resistance * (1 + SWING_PROXIMITY_PCT):
+        if current_price >= primary_resistance * (1 - p.get('SWING_PROXIMITY_PCT', SWING_PROXIMITY_PCT)) and current_price <= primary_resistance * (1 + p.get('SWING_PROXIMITY_PCT', SWING_PROXIMITY_PCT)):
             
             # Retest Protections
             is_valid_retest = True
@@ -192,22 +193,22 @@ def generate_signal(symbol: str, daily_df: Optional[pd.DataFrame] = None) -> Dic
             upper_wick = latest["high"] - max(latest["open"], latest["close"])
             wick_pct = (upper_wick / daily_range) if daily_range > 0 else 0
             
-            if wick_pct < SWING_RETEST_MIN_WICK_PCT_SHORT:
+            if wick_pct < p.get('SWING_RETEST_MIN_WICK_PCT_SHORT', SWING_RETEST_MIN_WICK_PCT_SHORT):
                 is_valid_retest = False
-                rejection_reason.append(f"Upper wick too small ({wick_pct*100:.1f}% < {SWING_RETEST_MIN_WICK_PCT_SHORT*100:.1f}%)")
+                rejection_reason.append(f"Upper wick too small ({wick_pct*100:.1f}% < {p.get('SWING_RETEST_MIN_WICK_PCT_SHORT', SWING_RETEST_MIN_WICK_PCT_SHORT)*100:.1f}%)")
                 
             # Close check
-            if SWING_RETEST_REQUIRE_CLOSE_BELOW_RESISTANCE and current_price > primary_resistance:
+            if p.get('SWING_RETEST_REQUIRE_CLOSE_BELOW_RESISTANCE', SWING_RETEST_REQUIRE_CLOSE_BELOW_RESISTANCE) and current_price > primary_resistance:
                 is_valid_retest = False
                 rejection_reason.append(f"Closed above resistance (${current_price:.2f} > ${primary_resistance:.2f})")
                 
             # Lower high check
-            if SWING_RETEST_REQUIRE_LOWER_HIGH and latest["high"] >= prev["high"]:
+            if p.get('SWING_RETEST_REQUIRE_LOWER_HIGH', SWING_RETEST_REQUIRE_LOWER_HIGH) and latest["high"] >= prev["high"]:
                 is_valid_retest = False
                 rejection_reason.append("Did not form a lower high")
                 
             # Volume check
-            if SWING_RETEST_VOLUME_MULTIPLIER_SHORT > 0 and vol < vol_avg * SWING_RETEST_VOLUME_MULTIPLIER_SHORT:
+            if p.get('SWING_RETEST_VOLUME_MULTIPLIER_SHORT', SWING_RETEST_VOLUME_MULTIPLIER_SHORT) > 0 and vol < vol_avg * p.get('SWING_RETEST_VOLUME_MULTIPLIER_SHORT', SWING_RETEST_VOLUME_MULTIPLIER_SHORT):
                 is_valid_retest = False
                 rejection_reason.append("Insufficient volume spike")
 
@@ -215,15 +216,15 @@ def generate_signal(symbol: str, daily_df: Optional[pd.DataFrame] = None) -> Dic
                 result["signal"] = "short"
                 result["entry_type"] = "resistance_retest"
                 # Stop loss placed slightly above the swing high / resistance
-                result["stop_loss"] = round(primary_resistance + (atr * SWING_STOP_MULTIPLIER), 2)
+                result["stop_loss"] = round(primary_resistance + (atr * p.get('SWING_STOP_MULTIPLIER', SWING_STOP_MULTIPLIER)), 2)
                 # Take profit targeting RR 
                 risk = abs(result["stop_loss"] - current_price)
-                result["take_profit"] = round(current_price - (risk * SWING_PROFIT_R_MAX), 2)
+                result["take_profit"] = round(current_price - (risk * p.get('SWING_PROFIT_R_MAX', SWING_PROFIT_R_MAX)), 2)
                 
                 result["reason"] = (
                     f"Short Setup: Valid rejection at resistance (${primary_resistance:.2f}). "
                     f"Upper Wick: {wick_pct*100:.1f}%, RSI: {rsi:.1f}. "
-                    f"Targeting {SWING_PROFIT_R_MAX}R."
+                    f"Targeting {p.get('SWING_PROFIT_R_MAX', SWING_PROFIT_R_MAX)}R."
                 )
                 logger.info(f"[{symbol}] SHORT signal: {result['reason']}")
                 return result
@@ -239,10 +240,14 @@ def generate_signal(symbol: str, daily_df: Optional[pd.DataFrame] = None) -> Dic
 
 
 def generate_signals_batch(symbols: list,
-                           daily_cache: Optional[Dict[str, pd.DataFrame]] = None) -> list:
-    signals = []
-    for symbol in symbols:
-        daily_df = daily_cache.get(symbol) if daily_cache else None
-        sig = generate_signal(symbol, daily_df=daily_df)
-        signals.append(sig)
-    return signals
+                           daily_cache: Optional[Dict[str, pd.DataFrame]] = None,
+                           params: Optional[Dict[str, Any]] = None) -> list:
+    """Generate signals for a symbol list using one consistent parameter snapshot."""
+    return [
+        generate_signal(
+            symbol,
+            daily_df=daily_cache.get(symbol) if daily_cache else None,
+            params=params,
+        )
+        for symbol in symbols
+    ]

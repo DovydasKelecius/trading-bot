@@ -64,10 +64,14 @@ SWING_PROFIT_R_MIN = 2.0     # Minimum risk-reward ratio for take-profit (2R)
 SWING_PROFIT_R_MAX = 3.0     # Target take-profit at 3R
 SWING_POSITION_SIZE_REDUCTION = 0.0  # No size reduction (trailing stop manages risk)
 
-# ── Ratchet Trailing Stop ──────────────────────────────────────────────────
+# ── Ratchet & Breakeven Trailing Stop ──────────────────────────────────────
 SWING_RATCHET_ENABLED = True          # Tighten stop after significant gain
 SWING_RATCHET_THRESHOLD = 0.20        # Gain % to trigger ratchet (20%)
 SWING_RATCHET_STOP_MULTIPLIER = 1.5   # Tighter ATR multiplier after ratchet
+
+# Lock profit based on Risk (R-Multiples)
+SWING_LOCK_PROFIT_AT_R = 1.5          # When price reaches +1.5R in profit...
+SWING_LOCK_PROFIT_TO_R = 1.0          # ...move the stop loss to +1.0R (locking 1R)
 
 # ── Structure Detection ────────────────────────────────────────────────────
 # How many recent daily bars to scan when looking for a swing high/low
@@ -238,3 +242,20 @@ ALERT_ON_DAILY_REPORT = True               # Alert with daily P&L summary
 # --- Advanced Charting ---
 CANDLESTICK_DEFAULT_BARS = 60              # Default number of bars for candlestick charts
 CHART_INDICATORS = ["sma_50", "sma_200", "vwap", "rsi", "atr"]  # Indicators to show on charts
+# --- Oscillation / Mean-Reversion Strategy ---
+OSCILLATION_ENABLED = False
+SWING_STRATEGY_MODE = "structure"  # "structure" or "oscillation"
+OSCILLATION_LOOKBACK = 50
+OSCILLATION_ENTRY_Z = 1.8
+OSCILLATION_EXIT_Z = 0.25
+OSCILLATION_RSI_PERIOD = 14
+OSCILLATION_RSI_LOW = 35
+OSCILLATION_RSI_HIGH = 65
+OSCILLATION_MIN_CYCLE_SCORE = 0.55
+OSCILLATION_MAX_TREND_STRENGTH = 0.35
+OSCILLATION_MIN_CROSSINGS = 3
+OSCILLATION_MAX_HOLD_BARS = 20
+OSCILLATION_STOP_ATR = 2.0
+OSCILLATION_TAKE_PROFIT_ATR = 2.5
+OSCILLATION_FEE_BPS = 1.0
+OSCILLATION_SLIPPAGE_BPS = 2.0

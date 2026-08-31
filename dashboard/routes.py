@@ -9,7 +9,7 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Request, Query
+from fastapi import APIRouter, Request, Query, HTTPException
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.templating import Jinja2Templates
 
@@ -20,6 +20,10 @@ from core.scheduler import get_bot_health_status
 from db.database import get_db, log_heartbeat
 from db.models import Trade, HeartbeatLog, EquityHistory
 import config
+from core.config_manager import config_mgr
+from core.profile_manager import profile_mgr
+from backtesting.oscillation import run_backtest
+from optimization.random_search import run_random_search
 
 logger = logging.getLogger(__name__)
 
@@ -628,3 +632,136 @@ async def api_alerts_test():
         level="info",
     )
     return {"success": True, "message": "Test alert dispatched"}
+
+
+@router.get('/settings', response_class=HTMLResponse)
+async def settings_page(request: Request):
+    settings = _editable_settings()
+    keys = sorted(settings.keys())
+    return templates.TemplateResponse(request, 'settings.html', {'settings': settings, 'keys': keys})
+
+@router.post('/api/settings')
+async def update_settings(request: Request):
+    data = await request.json()
+    current = _editable_settings()
+    unknown = set(data) - set(current)
+    if unknown:
+        raise HTTPException(400, f"Unknown or protected settings: {', '.join(sorted(unknown))}")
+    config_mgr.update({key: _coerce_value(value, current[key]) for key, value in data.items()})
+    return {'status': 'success', 'message': 'Settings updated'}
+
+
+EDITABLE_PREFIXES = ("DAY_", "SWING_", "OSCILLATION_", "MAX_RISK_", "MAX_POSITION_")
+
+
+def _editable_settings():
+    return {key: value for key, value in config_mgr.get_all().items() if key.startswith(EDITABLE_PREFIXES)}
+
+
+def _coerce_value(value, current):
+    if not isinstance(value, str):
+        return value
+    if isinstance(current, bool):
+        lowered = value.strip().lower()
+        if lowered not in ("true", "false"):
+            raise HTTPException(400, f"Expected true or false, received {value}")
+        return lowered == "true"
+    if isinstance(current, int) and not isinstance(current, bool):
+        return int(value)
+    if isinstance(current, float):
+        return float(value)
+    if isinstance(current, list):
+        return [item.strip().upper() for item in value.split(",") if item.strip()]
+    return value.strip()
+
+
+@router.get('/experiments', response_class=HTMLResponse)
+async def experiments_page(request: Request):
+    return templates.TemplateResponse(request, 'experiments.html', {
+        'profiles': profile_mgr.list(),
+        'settings': _editable_settings(),
+    })
+
+
+@router.get('/api/profiles')
+async def list_profiles():
+    return profile_mgr.list()
+
+
+@router.post('/api/profiles')
+async def save_profile(request: Request):
+    data = await request.json()
+    name = str(data.get('name', '')).strip()
+    if not name:
+        raise HTTPException(400, 'Profile name is required')
+    settings = data.get('settings') or _editable_settings()
+    settings = {key: value for key, value in settings.items() if key in _editable_settings()}
+    return profile_mgr.save(name, settings)
+
+
+@router.post('/api/profiles/{profile_id}/apply')
+async def apply_profile(profile_id: str):
+    try:
+        return profile_mgr.load(profile_id, apply=True)
+    except FileNotFoundError:
+        raise HTTPException(404, 'Profile not found')
+
+
+@router.delete('/api/profiles/{profile_id}')
+async def delete_profile(profile_id: str):
+    try:
+        profile_mgr.delete(profile_id)
+    except FileNotFoundError:
+        raise HTTPException(404, 'Profile not found')
+    return {'status': 'deleted'}
+
+
+def _backtest_frame(data):
+    bars = data.get('bars')
+    if bars:
+        frame = pd.DataFrame(bars)
+    else:
+        symbol = str(data.get('symbol', 'SPY')).upper().strip()
+        limit = max(250, min(int(data.get('bars_limit', 1000)), 5000))
+        frame = __import__('core.data_ingestion', fromlist=['get_daily_data']).get_daily_data(symbol, limit=limit)
+        if frame is None or frame.empty:
+            raise ValueError(f'No historical data available for {symbol}')
+        frame = frame.reset_index()
+    frame.columns = [str(column).lower() for column in frame.columns]
+    if 'timestamp' not in frame.columns:
+        if 'date' in frame.columns:
+            frame['timestamp'] = frame['date']
+        elif 'index' in frame.columns:
+            frame['timestamp'] = frame['index']
+    required = {'open', 'high', 'low', 'close', 'volume'}
+    missing = required - set(frame.columns)
+    if missing:
+        raise ValueError(f"Missing OHLCV columns: {', '.join(sorted(missing))}")
+    return frame
+
+
+@router.post('/api/backtest/oscillation')
+async def api_oscillation_backtest(request: Request):
+    data = await request.json()
+    try:
+        frame = await asyncio.to_thread(_backtest_frame, data)
+        params = {**_editable_settings(), **data.get('params', {})}
+        return await asyncio.to_thread(
+            run_backtest, frame, params, float(data.get('initial_equity', 100000)),
+            float(data.get('position_pct', 0.10)), data.get('start'), data.get('end')
+        )
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.post('/api/optimize/oscillation/random')
+async def api_oscillation_random_search(request: Request):
+    data = await request.json()
+    try:
+        frame = await asyncio.to_thread(_backtest_frame, data)
+        return await asyncio.to_thread(
+            run_random_search, frame, int(data.get('tests', 50)), int(data.get('seed', 42)),
+            _editable_settings(), float(data.get('initial_equity', 100000)), data.get('start'), data.get('end')
+        )
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, str(exc))

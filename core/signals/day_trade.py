@@ -144,6 +144,17 @@ def generate_signal(symbol: str, intraday_df: Optional[pd.DataFrame] = None,
         logger.info(f"[{symbol}] {result['reason']}")
         return result
 
+    # Reject a known bearish daily trend before requiring unrelated daily
+    # indicators. This preserves the most specific rejection reason when a
+    # caller supplies only the SMA data needed for the cross-timeframe gate.
+    sma_col = f"sma_{SWING_SMA_FAST}"
+    if sma_col in daily_df.columns:
+        slope = get_sma_slope(daily_df, sma_col, periods=5)
+        if slope is not None and slope < 0:
+            result["signal"] = "hold"
+            result["reason"] = f"Trend filter rejection — Daily 50 SMA slope is bearish ({slope:.4f})."
+            return result
+
     # Require daily ATR to be available (critical for proper stop/profit sizing)
     if daily_atr is None or daily_atr <= 0:
         result["signal"] = "hold"

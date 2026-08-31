@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+    <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Oscillation Experiments</title>
+    <script src="https://cdn.tailwindcss.com"></script><script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script>tailwind.config={darkMode:'class',theme:{extend:{colors:{dark:{900:'#11111b',800:'#1e1e2e',700:'#313244',600:'#45475a'}}}}}</script>
+</head>
+<body class="bg-dark-900 text-gray-200 min-h-screen p-6">
+<main class="max-w-7xl mx-auto space-y-6">
+    <header class="bg-dark-800 border border-dark-700 rounded-xl p-6 flex flex-col md:flex-row justify-between gap-4">
+        <div><h1 class="text-3xl font-bold">Oscillation Experiment Console</h1><p class="text-gray-400 mt-1">Backtest saved settings. Random search never changes live settings.</p></div>
+        <div class="flex gap-3"><a href="/settings" class="px-4 py-2 bg-dark-700 rounded-lg">Settings</a><a href="/" class="px-4 py-2 bg-dark-700 rounded-lg">Dashboard</a></div>
+    </header>
+    <section class="bg-dark-800 border border-dark-700 rounded-xl p-6 grid grid-cols-1 md:grid-cols-4 gap-4">
+        <label>Symbol<input id="symbol" value="SPY" class="block w-full mt-1 bg-dark-900 border border-dark-600 rounded px-3 py-2"></label>
+        <label>Start date<input id="start" type="date" class="block w-full mt-1 bg-dark-900 border border-dark-600 rounded px-3 py-2"></label>
+        <label>End date<input id="end" type="date" class="block w-full mt-1 bg-dark-900 border border-dark-600 rounded px-3 py-2"></label>
+        <label>Initial balance<input id="equity" type="number" value="100000" class="block w-full mt-1 bg-dark-900 border border-dark-600 rounded px-3 py-2"></label>
+        <label>Historical bars<input id="bars" type="number" min="250" max="5000" value="1000" class="block w-full mt-1 bg-dark-900 border border-dark-600 rounded px-3 py-2"></label>
+        <label>Random tests<input id="tests" type="number" min="1" max="500" value="50" class="block w-full mt-1 bg-dark-900 border border-dark-600 rounded px-3 py-2"></label>
+        <button onclick="runBacktest()" class="self-end bg-blue-600 hover:bg-blue-500 rounded-lg px-4 py-2 font-semibold">Run Backtest</button>
+        <button onclick="runSearch()" class="self-end bg-purple-600 hover:bg-purple-500 rounded-lg px-4 py-2 font-semibold">Run Random Search</button>
+    </section>
+    <div id="status" class="hidden p-4 rounded-lg"></div>
+    <section id="metrics" class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3"></section>
+    <section class="bg-dark-800 border border-dark-700 rounded-xl p-5"><canvas id="curve" height="90"></canvas></section>
+    <section class="bg-dark-800 border border-dark-700 rounded-xl p-5 overflow-auto"><h2 class="text-xl font-semibold mb-3">Leaderboard</h2><table class="w-full text-sm"><thead><tr class="text-left text-gray-400"><th>Rank</th><th>Score</th><th>Return</th><th>Drawdown</th><th>Sharpe</th><th>Trades</th><th>Lookback</th><th>Entry Z</th></tr></thead><tbody id="leaderboard"></tbody></table></section>
+</main>
+<script>
+let chart;
+function payload(){return {symbol:document.getElementById('symbol').value.toUpperCase(),start:document.getElementById('start').value||null,end:document.getElementById('end').value||null,initial_equity:Number(document.getElementById('equity').value),bars_limit:Number(document.getElementById('bars').value),tests:Number(document.getElementById('tests').value)}}
+function busy(message){const box=document.getElementById('status');box.className='p-4 rounded-lg bg-blue-900/40 text-blue-200';box.textContent=message}
+function fail(message){const box=document.getElementById('status');box.className='p-4 rounded-lg bg-red-900/40 text-red-200';box.textContent=message}
+function showMetrics(m){const labels={return_pct:'Return %',max_drawdown_pct:'Max drawdown %',sharpe:'Sharpe',profit_factor:'Profit factor',win_rate_pct:'Win rate %',trades:'Trades',net_profit:'Net profit',final_equity:'Final equity'};document.getElementById('metrics').innerHTML=Object.entries(labels).map(([k,l])=>`<div class="bg-dark-800 border border-dark-700 rounded-lg p-3"><div class="text-xs text-gray-400">${l}</div><div class="text-xl font-bold">${m[k]}</div></div>`).join('')}
+function showCurve(points){if(chart)chart.destroy();chart=new Chart(document.getElementById('curve'),{type:'line',data:{labels:points.map(p=>p.date),datasets:[{label:'Equity',data:points.map(p=>p.equity),borderColor:'#60a5fa',pointRadius:0}]},options:{plugins:{legend:{labels:{color:'#ddd'}}},scales:{x:{ticks:{color:'#999',maxTicksLimit:10}},y:{ticks:{color:'#999'}}}}})}
+async function call(url,body){const response=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});const data=await response.json();if(!response.ok)throw new Error(data.detail||'Request failed');return data}
+async function runBacktest(){busy('Running deterministic backtest…');try{const result=await call('/api/backtest/oscillation',payload());showMetrics(result.metrics);showCurve(result.equity_curve);busy(`Complete: ${result.metrics.trades} trades.`)}catch(error){fail(error.message)}}
+async function runSearch(){busy('Testing parameter combinations…');try{const result=await call('/api/optimize/oscillation/random',payload());showMetrics(result.best.metrics);document.getElementById('leaderboard').innerHTML=result.leaderboard.map((r,i)=>`<tr class="border-t border-dark-700"><td>${i+1}</td><td>${r.score}</td><td>${r.metrics.return_pct}%</td><td>${r.metrics.max_drawdown_pct}%</td><td>${r.metrics.sharpe}</td><td>${r.metrics.trades}</td><td>${r.params.OSCILLATION_LOOKBACK}</td><td>${r.params.OSCILLATION_ENTRY_Z}</td></tr>`).join('');busy(`Search complete. Best score: ${result.best.score}`)}catch(error){fail(error.message)}}
+</script></body></html>

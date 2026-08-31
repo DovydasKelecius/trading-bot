@@ -14,6 +14,7 @@ from datetime import datetime
 from typing import Optional, Dict, Any
 
 import config
+from core.config_manager import config_mgr
 from core import alpaca_client
 from core.risk_manager import (
     calculate_position_size, calculate_stop_loss, calculate_take_profit,
@@ -102,6 +103,8 @@ def execute_entry(symbol: str, strategy_type: str, signal: Dict[str, Any],
         logger.warning(f"[{symbol}] Invalid signal data: price={entry_price}, atr={atr}")
         return None
 
+    params = config_mgr.get_all()
+
     # Determine side based on signal
     side = "sell" if signal.get("signal") == "short" else "buy"
 
@@ -109,7 +112,8 @@ def execute_entry(symbol: str, strategy_type: str, signal: Dict[str, Any],
     shares = calculate_position_size(
         portfolio_equity, atr, strategy_type, 
         entry_price=entry_price, 
-        stop_loss=signal.get("stop_loss")
+        stop_loss=signal.get("stop_loss"),
+        params=params,
     )
     if shares <= 0:
         logger.warning(f"[{symbol}] Position size is 0 — skipping")
@@ -124,7 +128,8 @@ def execute_entry(symbol: str, strategy_type: str, signal: Dict[str, Any],
 
     # Pre-trade risk checks
     approved, reason = pre_trade_check(
-        symbol, strategy_type, shares, entry_price, portfolio_equity, buying_power
+        symbol, strategy_type, shares, entry_price, portfolio_equity, buying_power,
+        params=params,
     )
     if not approved:
         log_heartbeat(
@@ -144,8 +149,8 @@ def execute_entry(symbol: str, strategy_type: str, signal: Dict[str, Any],
 
     # Check trading mode
     if not config.ENABLE_TRADING:
-        stop_loss = signal.get("stop_loss") or calculate_stop_loss(entry_price, atr, strategy_type, side)
-        take_profit = signal.get("take_profit") or calculate_take_profit(entry_price, atr, strategy_type, side)
+        stop_loss = signal.get("stop_loss") or calculate_stop_loss(entry_price, atr, strategy_type, side, params=params)
+        take_profit = signal.get("take_profit") or calculate_take_profit(entry_price, atr, strategy_type, side, params=params)
         logger.info(
             f"MONITOR MODE — order not placed: {side.upper()} {shares} {symbol} @ ~${entry_price:.2f} "
             f"({strategy_type}), SL=${stop_loss:.2f}, TP={take_profit}"
@@ -200,8 +205,8 @@ def execute_entry(symbol: str, strategy_type: str, signal: Dict[str, Any],
     actual_qty = fill_details["filled_qty"] or shares
 
     # Recalculate stops using the ACTUAL fill price (not the signal price)
-    stop_loss = signal.get("stop_loss") or calculate_stop_loss(actual_fill_price, atr, strategy_type, side)
-    take_profit = signal.get("take_profit") or calculate_take_profit(actual_fill_price, atr, strategy_type, side)
+    stop_loss = signal.get("stop_loss") or calculate_stop_loss(actual_fill_price, atr, strategy_type, side, params=params)
+    take_profit = signal.get("take_profit") or calculate_take_profit(actual_fill_price, atr, strategy_type, side, params=params)
 
     # ── Step 4: Record confirmed trade in database ────────────────────
     with get_db() as session:
@@ -306,19 +311,19 @@ def execute_exit(trade_id: int, exit_price: float, reason: str = "signal",
         held_qty = 0
         for pos in positions:
             if pos["symbol"] == symbol:
-                held_qty = pos["qty"]
+                held_qty = abs(int(pos["qty"]))  # use abs() since shorts might return negative qty
                 break
 
         if held_qty <= 0:
             logger.warning(
-                f"[{symbol}] No Alpaca position found — cannot sell. "
+                f"[{symbol}] No Alpaca position found — cannot close. "
                 f"Entry order may not have filled. Marking trade as closed with P&L=0."
             )
             log_heartbeat(
                 f"No position for {symbol} on Alpaca — marking trade closed (entry likely unfilled)",
                 level="warning"
             )
-            # Mark trade as closed in DB without submitting a sell order
+            # Mark trade as closed in DB without submitting an order
             trade.exit_price = trade.entry_price  # No actual fill, so P&L = 0
             trade.pnl = 0.0
             trade.status = "closed"
@@ -342,18 +347,19 @@ def execute_exit(trade_id: int, exit_price: float, reason: str = "signal",
             )
             return True
 
-        # Cap sell quantity to what we actually hold (safety)
-        sell_qty = min(trade_quantity, held_qty)
-        if sell_qty < trade_quantity:
+        # Cap close quantity to what we actually hold (safety)
+        close_qty = min(trade_quantity, held_qty)
+        if close_qty < trade_quantity:
             logger.warning(
                 f"[{symbol}] Position mismatch: DB says {trade_quantity} shares, "
-                f"Alpaca has {held_qty}. Selling {sell_qty}."
+                f"Alpaca has {held_qty}. Closing {close_qty}."
             )
 
-        # Submit sell order
-        order_id = alpaca_client.submit_market_order(symbol, sell_qty, "sell")
+        # Submit closing order (Buy to cover if short, Sell to close if long)
+        exit_order_side = "sell" if trade.side == "buy" else "buy"
+        order_id = alpaca_client.submit_market_order(symbol, close_qty, exit_order_side)
         if not order_id:
-            log_heartbeat(f"Failed to submit sell order for {symbol}", level="error")
+            log_heartbeat(f"Failed to submit {exit_order_side} order for {symbol}", level="error")
             return False
 
         # Calculate P&L
