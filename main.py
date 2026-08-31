@@ -15,6 +15,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.events import EVENT_JOB_ERROR
 from fastapi import FastAPI
 import uvicorn
+import config
 
 from config import (
     DASHBOARD_HOST, DASHBOARD_PORT, HEALTH_CHECK_INTERVAL_SECONDS,
@@ -58,7 +59,10 @@ async def lifespan(app: FastAPI):
     # Register error listener
     scheduler.add_listener(job_error_listener, EVENT_JOB_ERROR)
 
-    # Add all 7 scheduled jobs
+    # Add all scheduled jobs. Cron minute fields run from 0-59, so an hourly
+    # cadence must use minute 0 rather than the invalid expression */60.
+    swing_interval = max(1, int(getattr(config, "SWING_SCAN_INTERVAL_MINUTES", 60)))
+    swing_minute = "0" if swing_interval >= 60 else f"*/{swing_interval}"
     scheduler.add_job(
         pre_market_setup, 'cron',
         hour=9, minute=0, day_of_week='mon-fri',
@@ -73,7 +77,7 @@ async def lifespan(app: FastAPI):
     )
     scheduler.add_job(
         swing_trade_scan, 'cron',
-        hour='9,13', minute=35, day_of_week='mon-fri',
+        hour='*', minute=swing_minute,
         id='swing_trade_scan', replace_existing=True,
         misfire_grace_time=300
     )

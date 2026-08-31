@@ -34,7 +34,7 @@ SEARCH_SPACE = {
     "OSCILLATION_MIN_CROSSINGS": (2, 12, "int"),
     "OSCILLATION_FEE_BPS": (0.0, 10.0, "float"),
     "OSCILLATION_SLIPPAGE_BPS": (0.0, 15.0, "float"),
-    "OSCILLATION_POSITION_PCT": (0.02, 0.25, "float"),
+    "OSCILLATION_POSITION_PCT": (0.10, 1.00, "float"),
 }
 
 

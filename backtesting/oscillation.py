@@ -32,7 +32,10 @@ def _metrics(initial: float, equity: float, trades: list, curve: list,
     }
     curve_df = pd.DataFrame(curve)
     if not curve_df.empty:
-        curve_df["period"] = pd.to_datetime(curve_df["date"]).dt.to_period("M")
+        # Periods have no timezone; normalize aware timestamps explicitly to
+        # avoid pandas' noisy implicit conversion warning.
+        curve_dates = pd.to_datetime(curve_df["date"], utc=True).dt.tz_localize(None)
+        curve_df["period"] = curve_dates.dt.to_period("M")
         month_end = curve_df.groupby("period")["equity"].last()
         monthly_returns = month_end.pct_change().fillna(month_end.iloc[0] / initial - 1) * 100
         metrics["monthly_returns_pct"] = {str(period): round(float(value), 3) for period, value in monthly_returns.items()}
@@ -47,7 +50,7 @@ def _metrics(initial: float, equity: float, trades: list, curve: list,
                 benchmark["timestamp"] = benchmark["date"]
             else:
                 benchmark["timestamp"] = benchmark.index
-        benchmark["timestamp"] = pd.to_datetime(benchmark["timestamp"])
+        benchmark["timestamp"] = pd.to_datetime(benchmark["timestamp"], utc=True).dt.tz_localize(None)
         benchmark = benchmark.sort_values("timestamp")
         if len(benchmark) >= 2:
             benchmark_return = (float(benchmark["close"].iloc[-1]) / float(benchmark["close"].iloc[0]) - 1) * 100
@@ -72,16 +75,25 @@ def run_backtest(df: pd.DataFrame, params: Optional[Dict[str, Any]] = None,
     if position_pct is None:
         position_pct = float(p.get("OSCILLATION_POSITION_PCT", 0.10))
     data = add_oscillation_indicators(df.sort_index().reset_index(drop=True), p)
-    if start and "timestamp" in data.columns:
-        data = data[pd.to_datetime(data["timestamp"]).dt.date >= pd.Timestamp(start).date()]
-    if end and "timestamp" in data.columns:
-        data = data[pd.to_datetime(data["timestamp"]).dt.date <= pd.Timestamp(end).date()]
+    if "timestamp" not in data.columns:
+        data["timestamp"] = data.get("date", data.index)
+    data["timestamp"] = pd.to_datetime(data["timestamp"], utc=True).dt.tz_localize(None)
+    if start:
+        start_cutoff = pd.to_datetime(start, utc=True).tz_localize(None)
+        data = data[data["timestamp"] >= start_cutoff]
+    if end:
+        end_cutoff = pd.to_datetime(end, utc=True).tz_localize(None)
+        data = data[data["timestamp"] <= end_cutoff]
     data = data.reset_index(drop=True)
+    if data.empty:
+        raise ValueError("The selected dates contain no strategy bars")
+    test_start, test_end = data["timestamp"].min(), data["timestamp"].max()
 
     cash = float(initial_equity)
     position = None
     pending = None
     trades, curve = [], []
+    signal_diagnostics = {"eligible_bars": 0, "long_entries": 0, "short_entries": 0}
     fee_rate = float(p.get("OSCILLATION_FEE_BPS", 1.0)) / 10_000
     slip_rate = float(p.get("OSCILLATION_SLIPPAGE_BPS", 2.0)) / 10_000
 
@@ -132,10 +144,14 @@ def run_backtest(df: pd.DataFrame, params: Optional[Dict[str, Any]] = None,
 
         if position is None and index < len(data) - 1 and not pd.isna(row.get("osc_cycle_score")):
             regime = row["osc_cycle_score"] >= float(p["OSCILLATION_MIN_CYCLE_SCORE"]) and row["osc_trend_strength"] <= float(p["OSCILLATION_MAX_TREND_STRENGTH"])
+            if regime:
+                signal_diagnostics["eligible_bars"] += 1
             if regime and row["osc_z"] <= -float(p["OSCILLATION_ENTRY_Z"]) and row["osc_rsi"] <= float(p["OSCILLATION_RSI_LOW"]):
                 pending = "long"
+                signal_diagnostics["long_entries"] += 1
             elif regime and row["osc_z"] >= float(p["OSCILLATION_ENTRY_Z"]) and row["osc_rsi"] >= float(p["OSCILLATION_RSI_HIGH"]):
                 pending = "short"
+                signal_diagnostics["short_entries"] += 1
 
         marked = cash
         if position:
@@ -151,9 +167,20 @@ def run_backtest(df: pd.DataFrame, params: Optional[Dict[str, Any]] = None,
         curve[-1]["equity"] = round(cash, 2)
 
     benchmark = benchmark_df
-    if benchmark is not None and start and "timestamp" in benchmark.columns:
-        benchmark = benchmark[pd.to_datetime(benchmark["timestamp"]).dt.date >= pd.Timestamp(start).date()]
-    if benchmark is not None and end and "timestamp" in benchmark.columns:
-        benchmark = benchmark[pd.to_datetime(benchmark["timestamp"]).dt.date <= pd.Timestamp(end).date()]
+    if benchmark is not None and not benchmark.empty:
+        benchmark = benchmark.copy()
+        if "timestamp" not in benchmark.columns:
+            benchmark["timestamp"] = benchmark.get("date", benchmark.index)
+        benchmark["timestamp"] = pd.to_datetime(benchmark["timestamp"], utc=True).dt.tz_localize(None)
+        # Always align benchmark to the actual strategy bars, not merely the
+        # requested range. This prevents a multi-year benchmark from being
+        # compared to a shorter strategy test.
+        benchmark = benchmark[(benchmark["timestamp"] >= test_start) & (benchmark["timestamp"] <= test_end)]
     metrics = _metrics(initial_equity, cash, trades, curve, benchmark_df=benchmark, monthly_target_pct=float(p.get("MONTHLY_TARGET_PCT", 10.0)))
-    return {"metrics": metrics, "trades": trades, "equity_curve": curve, "params": p}
+    metrics.update({
+        "test_start": test_start.date().isoformat(), "test_end": test_end.date().isoformat(),
+        "bars_tested": len(data),
+        "benchmark_start": benchmark["timestamp"].min().date().isoformat() if benchmark is not None and not benchmark.empty else None,
+        "benchmark_end": benchmark["timestamp"].max().date().isoformat() if benchmark is not None and not benchmark.empty else None,
+    })
+    return {"metrics": metrics, "trades": trades, "equity_curve": curve, "params": p, "signal_diagnostics": signal_diagnostics}

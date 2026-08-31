@@ -744,7 +744,7 @@ def _backtest_frame(data):
     else:
         symbol = str(data.get('symbol', 'SPY')).upper().strip()
         minimum = int(getattr(config, 'BACKTEST_MIN_HISTORY_BARS', 100))
-        requested = int(data.get('bars_limit', max(500, minimum)))
+        requested = _requested_history_bars(data, minimum)
         if requested < minimum:
             raise ValueError(f'At least {minimum} daily bars are required')
         limit = min(requested, 5000)
@@ -775,7 +775,7 @@ def _benchmark_frame(data):
     if bars:
         frame = pd.DataFrame(bars)
     else:
-        limit = max(int(getattr(config, 'BACKTEST_MIN_HISTORY_BARS', 100)), min(int(data.get('bars_limit', 1500)), 5000))
+        limit = _requested_history_bars(data, int(getattr(config, 'BACKTEST_MIN_HISTORY_BARS', 100)))
         frame = __import__('core.data_ingestion', fromlist=['get_daily_data']).get_daily_data(
             str(data.get('benchmark_symbol') or getattr(config, 'BENCHMARK_SYMBOL', 'QQQ')).upper(), limit=limit
         )
@@ -788,6 +788,19 @@ def _benchmark_frame(data):
     if not {'close', 'timestamp'} <= set(frame.columns):
         raise ValueError('Benchmark data must contain close and timestamp columns')
     return frame
+
+
+def _requested_history_bars(data, warmup=100):
+    """Fetch the selected date range plus indicator warmup bars only."""
+    start, end = data.get('start'), data.get('end')
+    if start:
+        start_date = pd.to_datetime(start, utc=True).date()
+        end_date = pd.to_datetime(end, utc=True).date() if end else pd.Timestamp.utcnow().date()
+        calendar_days = max((end_date - start_date).days, 1)
+        # Daily market data excludes weekends/holidays; 1.5x is a practical
+        # trading-day estimate, plus warmup for rolling indicators.
+        return min(5000, max(int(warmup), int(calendar_days * 1.5) + int(warmup)))
+    return max(int(warmup), 500)
 
 
 @router.post('/api/backtest/oscillation')

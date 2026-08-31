@@ -257,6 +257,8 @@ CHART_INDICATORS = ["sma_50", "sma_200", "vwap", "rsi", "atr"]  # Indicators to 
 # --- Oscillation / Mean-Reversion Strategy ---
 OSCILLATION_ENABLED = False
 SWING_STRATEGY_MODE = "structure"  # "structure" or "oscillation"
+SWING_24_7_ENABLED = True  # Needed for commodity/CFD instruments such as natural gas
+SWING_SCAN_INTERVAL_MINUTES = 60
 OSCILLATION_LOOKBACK = 50
 OSCILLATION_ENTRY_Z = 1.8
 OSCILLATION_EXIT_Z = 0.25

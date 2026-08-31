@@ -446,7 +446,7 @@ def swing_trade_scan():
     9:35 AM + 1:00 PM ET: Analyze daily candles for swing watchlist,
     check entry/exit conditions, update trailing stops.
     """
-    if not _check_market_open():
+    if not getattr(config, "SWING_24_7_ENABLED", False) and not _check_market_open():
         log_heartbeat("Swing scan: Market closed — skipping", level="info")
         return
 
