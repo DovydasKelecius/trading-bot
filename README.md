@@ -209,6 +209,8 @@ All tunable parameters live in `config.py`. No magic numbers elsewhere in the co
 
 **Day Trade** (10 symbols): AAPL, MSFT, TSLA, NVDA, AMD, META, AMZN, GOOGL, SPY, QQQ
 
+Commodity exposure is included through broker-supported ETF proxies (UNG natural gas, USO oil, GLD gold, SLV silver, DBA agriculture, DBB metals). Native CFD/futures ticker support is broker-specific; configure those symbols only when the connected broker's data and order APIs support them.
+
 **Swing Trade** (20 symbols): AAPL, MSFT, GOOGL, AMZN, META, NVDA, JPM, V, UNH, JNJ, PG, HD, MA, DIS, NFLX, ADBE, CRM, PYPL, INTC, CSCO
 
 ### Scheduling
@@ -676,6 +678,16 @@ All Alpaca API calls go through `_retry_on_rate_limit()` which implements expone
 
 ## Dependencies
 
+### Strategy optimization
+
+The **Learn & Test** page uses Optuna's multivariate TPE sampler. Each trial
+proposes all oscillation parameters together, allowing the optimizer to learn
+interactions such as lookback plus entry threshold rather than changing only
+one value at a time. Candidates are scored across chronological training
+periods and then checked against an untouched final holdout period. Results are
+saved under `experiments/`; applying a winning configuration always requires an
+explicit user action.
+
 ```
 alpaca-py>=0.21.0       # Alpaca Trading & Data API client (SDK)
 pandas>=2.0.0           # DataFrame operations for bar data & indicators
@@ -688,6 +700,7 @@ apscheduler>=3.10.0     # Background job scheduler (cron + interval)
 jinja2>=3.1.0           # HTML template engine for dashboard
 httpx>=0.27.0           # HTTP client for webhook delivery & news API fallback
 aiohttp>=3.9.0          # Async HTTP (used by some Alpaca SDK internals)
+optuna>=4.0.0,<5.0.0   # Multivariable TPE strategy-parameter optimization
 ```
 
 **Optional**: `ngrok` (pip package) for public URL tunneling to access dashboard remotely.

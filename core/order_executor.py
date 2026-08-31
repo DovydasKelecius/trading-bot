@@ -374,11 +374,11 @@ def execute_exit(trade_id: int, exit_price: float, reason: str = "signal",
         trade.notes = (trade.notes or "") + f" | Exit: {reason}"
 
     log_heartbeat(
-        f"SELL {trade_quantity} {symbol} @ ~${exit_price:.2f} ({status}) "
+        f"{exit_order_side.upper()} {trade_quantity} {symbol} @ ~${exit_price:.2f} ({status}) "
         f"P&L: ${pnl:.2f} — {reason}",
         level="info",
         event_type="order",
-        detail={"symbol": symbol, "strategy": trade_strategy, "side": "sell",
+        detail={"symbol": symbol, "strategy": trade_strategy, "side": exit_order_side,
                 "shares": trade_quantity, "exit_price": exit_price,
                 "entry_price": trade_entry_price, "pnl": round(pnl, 2),
                 "status": status, "reason": reason},

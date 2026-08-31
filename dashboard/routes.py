@@ -23,7 +23,8 @@ import config
 from core.config_manager import config_mgr
 from core.profile_manager import profile_mgr
 from backtesting.oscillation import run_backtest
-from optimization.random_search import run_random_search
+from optimization.random_search import run_random_search, SEARCH_SPACE
+from optimization.adaptive_search import run_adaptive_search
 
 logger = logging.getLogger(__name__)
 
@@ -185,6 +186,9 @@ async def api_bot_details():
         "start_time": _bot_start_time.isoformat() if _bot_start_time else None,
         "jobs": jobs_info,
         "paused": _scheduler_paused,
+        "automatic_scans": bool(_scheduler and _scheduler.running and not _scheduler_paused),
+        "scan_policy": "scheduled during market hours; entries stop at each strategy allocation cap",
+        "allocations": {"day": config.DAY_TRADE_ALLOCATION, "swing": config.SWING_TRADE_ALLOCATION},
     }
 
 
@@ -198,6 +202,7 @@ async def api_watchlist():
     return JSONResponse({
         "day_trade": config.DAY_TRADE_WATCHLIST,
         "swing_trade": config.SWING_TRADE_WATCHLIST,
+        "commodities": getattr(config, 'COMMODITY_WATCHLIST', []),
         "day_trade_count": len(config.DAY_TRADE_WATCHLIST),
         "swing_trade_count": len(config.SWING_TRADE_WATCHLIST),
     })
@@ -637,8 +642,10 @@ async def api_alerts_test():
 @router.get('/settings', response_class=HTMLResponse)
 async def settings_page(request: Request):
     settings = _editable_settings()
-    keys = sorted(settings.keys())
-    return templates.TemplateResponse(request, 'settings.html', {'settings': settings, 'keys': keys})
+    return templates.TemplateResponse(request, 'settings.html', {
+        'settings': settings,
+        'groups': _settings_groups(settings),
+    })
 
 @router.post('/api/settings')
 async def update_settings(request: Request):
@@ -656,6 +663,19 @@ EDITABLE_PREFIXES = ("DAY_", "SWING_", "OSCILLATION_", "MAX_RISK_", "MAX_POSITIO
 
 def _editable_settings():
     return {key: value for key, value in config_mgr.get_all().items() if key.startswith(EDITABLE_PREFIXES)}
+
+
+def _settings_groups(settings):
+    definitions = [
+        ("Oscillation strategy", "Wave detection, entries, exits, and trading costs", lambda key: key.startswith("OSCILLATION_")),
+        ("Swing strategy", "Strategy selection, trend structure, and swing risk", lambda key: key.startswith("SWING_")),
+        ("Day strategy", "Intraday signals and position controls", lambda key: key.startswith("DAY_")),
+        ("Portfolio risk", "Portfolio-wide limits applied before any order", lambda key: key.startswith(("MAX_RISK_", "MAX_POSITION_"))),
+    ]
+    return [
+        {"name": name, "description": description, "keys": sorted(key for key in settings if predicate(key))}
+        for name, description, predicate in definitions
+    ]
 
 
 def _coerce_value(value, current):
@@ -680,6 +700,7 @@ async def experiments_page(request: Request):
     return templates.TemplateResponse(request, 'experiments.html', {
         'profiles': profile_mgr.list(),
         'settings': _editable_settings(),
+        'search_keys': sorted(SEARCH_SPACE),
     })
 
 
@@ -722,7 +743,11 @@ def _backtest_frame(data):
         frame = pd.DataFrame(bars)
     else:
         symbol = str(data.get('symbol', 'SPY')).upper().strip()
-        limit = max(250, min(int(data.get('bars_limit', 1000)), 5000))
+        minimum = int(getattr(config, 'BACKTEST_MIN_HISTORY_BARS', 100))
+        requested = int(data.get('bars_limit', max(500, minimum)))
+        if requested < minimum:
+            raise ValueError(f'At least {minimum} daily bars are required')
+        limit = min(requested, 5000)
         frame = __import__('core.data_ingestion', fromlist=['get_daily_data']).get_daily_data(symbol, limit=limit)
         if frame is None or frame.empty:
             raise ValueError(f'No historical data available for {symbol}')
@@ -737,6 +762,31 @@ def _backtest_frame(data):
     missing = required - set(frame.columns)
     if missing:
         raise ValueError(f"Missing OHLCV columns: {', '.join(sorted(missing))}")
+    if not bars and len(frame) < int(getattr(config, 'BACKTEST_MIN_HISTORY_BARS', 1260)):
+        raise ValueError('Historical source returned too few daily bars')
+    return frame
+
+
+def _benchmark_frame(data):
+    """Load benchmark bars for the same period; supplied test bars stay offline."""
+    if data.get('bars') and not data.get('benchmark_bars'):
+        return None
+    bars = data.get('benchmark_bars')
+    if bars:
+        frame = pd.DataFrame(bars)
+    else:
+        limit = max(int(getattr(config, 'BACKTEST_MIN_HISTORY_BARS', 100)), min(int(data.get('bars_limit', 1500)), 5000))
+        frame = __import__('core.data_ingestion', fromlist=['get_daily_data']).get_daily_data(
+            str(data.get('benchmark_symbol') or getattr(config, 'BENCHMARK_SYMBOL', 'QQQ')).upper(), limit=limit
+        )
+        if frame is None or frame.empty:
+            raise ValueError(f"No benchmark data available for {str(data.get('benchmark_symbol') or getattr(config, 'BENCHMARK_SYMBOL', 'QQQ')).upper()}")
+        frame = frame.reset_index()
+    frame.columns = [str(column).lower() for column in frame.columns]
+    if 'timestamp' not in frame.columns:
+        frame['timestamp'] = frame.get('date', frame.get('index', frame.index))
+    if not {'close', 'timestamp'} <= set(frame.columns):
+        raise ValueError('Benchmark data must contain close and timestamp columns')
     return frame
 
 
@@ -746,9 +796,10 @@ async def api_oscillation_backtest(request: Request):
     try:
         frame = await asyncio.to_thread(_backtest_frame, data)
         params = {**_editable_settings(), **data.get('params', {})}
+        benchmark = await asyncio.to_thread(_benchmark_frame, data)
         return await asyncio.to_thread(
             run_backtest, frame, params, float(data.get('initial_equity', 100000)),
-            float(data.get('position_pct', 0.10)), data.get('start'), data.get('end')
+            float(data.get('position_pct', 0.10)), data.get('start'), data.get('end'), benchmark
         )
     except (ValueError, TypeError) as exc:
         raise HTTPException(400, str(exc))
@@ -759,9 +810,28 @@ async def api_oscillation_random_search(request: Request):
     data = await request.json()
     try:
         frame = await asyncio.to_thread(_backtest_frame, data)
+        benchmark = await asyncio.to_thread(_benchmark_frame, data)
         return await asyncio.to_thread(
             run_random_search, frame, int(data.get('tests', 50)), int(data.get('seed', 42)),
-            _editable_settings(), float(data.get('initial_equity', 100000)), data.get('start'), data.get('end')
+            _editable_settings(), float(data.get('initial_equity', 100000)), data.get('start'), data.get('end'),
+            True, benchmark, data.get('locked', [])
+        )
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(400, str(exc))
+
+
+@router.post('/api/optimize/oscillation/learn')
+async def api_oscillation_learning(request: Request):
+    data = await request.json()
+    try:
+        frame = await asyncio.to_thread(_backtest_frame, data)
+        benchmark = await asyncio.to_thread(_benchmark_frame, data)
+        locked = [key for key in data.get('locked', []) if key in SEARCH_SPACE]
+        return await asyncio.to_thread(
+            run_adaptive_search, frame, _editable_settings(),
+            int(data.get('max_iterations', 250)), int(data.get('patience', 25)),
+            int(data.get('folds', 4)), int(data.get('seed', 42)),
+            float(data.get('initial_equity', 100000)), True, benchmark, locked,
         )
     except (ValueError, TypeError) as exc:
         raise HTTPException(400, str(exc))

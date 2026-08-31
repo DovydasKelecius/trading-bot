@@ -12,6 +12,14 @@ from backtesting.oscillation import run_backtest
 
 
 SEARCH_SPACE = {
+    # Execution/risk settings are included so experiments can lock or mutate
+    # them alongside signal settings (the live risk gate consumes these keys).
+    "DAY_TRADE_ALLOCATION": (0.10, 0.80, "float"),
+    "SWING_TRADE_ALLOCATION": (0.10, 0.90, "float"),
+    "MAX_RISK_PER_TRADE": (0.005, 0.05, "float"),
+    "MAX_POSITION_VALUE_PCT": (0.05, 0.30, "float"),
+    "DAY_MAX_POSITIONS": (1, 20, "int"),
+    "SWING_MAX_POSITIONS": (1, 20, "int"),
     "OSCILLATION_LOOKBACK": (20, 120, "int"),
     "OSCILLATION_ENTRY_Z": (1.0, 3.0, "float"),
     "OSCILLATION_EXIT_Z": (0.0, 0.75, "float"),
@@ -22,15 +30,23 @@ SEARCH_SPACE = {
     "OSCILLATION_MAX_HOLD_BARS": (5, 40, "int"),
     "OSCILLATION_STOP_ATR": (1.0, 3.5, "float"),
     "OSCILLATION_TAKE_PROFIT_ATR": (1.0, 4.0, "float"),
+    "OSCILLATION_RSI_PERIOD": (5, 30, "int"),
+    "OSCILLATION_MIN_CROSSINGS": (2, 12, "int"),
+    "OSCILLATION_FEE_BPS": (0.0, 10.0, "float"),
+    "OSCILLATION_SLIPPAGE_BPS": (0.0, 15.0, "float"),
+    "OSCILLATION_POSITION_PCT": (0.02, 0.25, "float"),
 }
 
 
 def fitness(metrics: Dict[str, Any]) -> float:
     trade_penalty = max(0, 12 - metrics["trades"]) * 0.5
     profit_factor = min(metrics["profit_factor"], 4)
+    benchmark_bonus = float(metrics.get("strategy_minus_benchmark_pct", 0.0)) * 0.5
+    target_bonus = float(metrics.get("target_hit_rate_pct", 0.0)) * 0.1
     return round(
         metrics["return_pct"] + metrics["sharpe"] * 2 + profit_factor
-        - metrics["max_drawdown_pct"] * 1.5 - trade_penalty,
+        - metrics["max_drawdown_pct"] * 1.5 - trade_penalty
+        + benchmark_bonus + target_bonus,
         4,
     )
 
@@ -48,16 +64,21 @@ def run_random_search(df: pd.DataFrame, tests: int = 50, seed: int = 42,
                       base_params: Optional[Dict[str, Any]] = None,
                       initial_equity: float = 100_000,
                       start: str | None = None, end: str | None = None,
-                      store: bool = True) -> Dict[str, Any]:
+                      store: bool = True, benchmark_df: Optional[pd.DataFrame] = None,
+                      locked_keys: Optional[list[str]] = None) -> Dict[str, Any]:
     tests = max(1, min(int(tests), 500))
     rng = random.Random(seed)
     results = []
     for run_number in range(1, tests + 1):
-        params = {**(base_params or {}), **_candidate(rng)}
-        result = run_backtest(df, params, initial_equity=initial_equity, start=start, end=end)
-        results.append({"run": run_number, "score": fitness(result["metrics"]), "metrics": result["metrics"], "params": params})
+        candidate = _candidate(rng)
+        if locked_keys:
+            candidate = {key: value for key, value in candidate.items() if key not in locked_keys}
+        params = {**(base_params or {}), **candidate}
+        result = run_backtest(df, params, initial_equity=initial_equity, start=start, end=end, benchmark_df=benchmark_df)
+        changed = [key for key in candidate if not base_params or params.get(key) != base_params.get(key)]
+        results.append({"run": run_number, "score": fitness(result["metrics"]), "metrics": result["metrics"], "params": params, "changed_count": len(changed), "changed_parameters": changed})
     results.sort(key=lambda item: item["score"], reverse=True)
-    payload = {"seed": seed, "tests": tests, "best": results[0], "leaderboard": results[:25]}
+    payload = {"seed": seed, "tests": tests, "locked_keys": list(locked_keys or []), "best": results[0], "leaderboard": results[:25]}
     if store:
         _store(payload)
     return payload

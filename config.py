@@ -163,6 +163,18 @@ SWING_TRADE_WATCHLIST = [
     "ADBE", "CRM", "PYPL", "INTC", "CSCO"
 ]
 
+# Commodity exposure available through Alpaca-listed ETF proxies. Native CFD/futures
+# symbols depend on the broker and are rejected clearly by the data adapter.
+COMMODITY_WATCHLIST = [
+    "UNG",  # natural gas
+    "USO",  # crude oil
+    "GLD",  # gold
+    "SLV",  # silver
+    "DBA",  # agriculture basket
+    "DBB",  # base metals
+]
+SWING_TRADE_WATCHLIST.extend(COMMODITY_WATCHLIST)
+
 # --- Dynamic Day Trade Universe Filters ---
 DAY_UNIVERSE_MIN_PRICE = 5.00          # Skip penny stocks below $5
 DAY_UNIVERSE_MAX_PRICE = 10000.00      # No upper limit effectively
@@ -259,3 +271,8 @@ OSCILLATION_STOP_ATR = 2.0
 OSCILLATION_TAKE_PROFIT_ATR = 2.5
 OSCILLATION_FEE_BPS = 1.0
 OSCILLATION_SLIPPAGE_BPS = 2.0
+OSCILLATION_POSITION_PCT = 0.10
+BACKTEST_MIN_HISTORY_BARS = 100
+BACKTEST_MIN_HISTORY_YEARS = 0
+BENCHMARK_SYMBOL = "QQQ"
+MONTHLY_TARGET_PCT = 10.0

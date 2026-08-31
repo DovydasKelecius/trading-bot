@@ -558,6 +558,21 @@ def swing_trade_scan():
     _run_with_retry("swing_trade_scan", _do_scan)
 
 
+def _price_exit(side, price, stop_loss, take_profit):
+    """Return exit status/reason when long or short price thresholds trigger."""
+    if side == "buy":
+        if price <= stop_loss:
+            return "stopped_out", f"Stop-loss @ ${stop_loss:.2f}"
+        if take_profit and price >= take_profit:
+            return "closed", f"Take-profit @ ${take_profit:.2f}"
+    elif side == "sell":
+        if price >= stop_loss:
+            return "stopped_out", f"Short stop-loss @ ${stop_loss:.2f}"
+        if take_profit and price <= take_profit:
+            return "closed", f"Short take-profit @ ${take_profit:.2f}"
+    return None
+
+
 def stop_loss_monitor():
     """
     Every 1 min, 9:30 AM - 4:00 PM ET: Check all open positions
@@ -592,35 +607,24 @@ def stop_loss_monitor():
             except Exception:
                 pass  # Non-critical: logging without indicators is still valuable
 
-            # Check stop-loss
-            if side == "buy" and price <= stop_loss:
+            threshold_exit = _price_exit(side, price, stop_loss, take_profit)
+            if threshold_exit:
+                exit_status, reason = threshold_exit
+                comparator = ("<=" if side == "buy" else ">=") if exit_status == "stopped_out" else (">=" if side == "buy" else "<=")
+                trigger = stop_loss if exit_status == "stopped_out" else take_profit
                 log_heartbeat(
-                    f"STOP-LOSS triggered: {symbol} @ ${price:.2f} <= ${stop_loss:.2f} ({strategy_type})",
-                    level="warning"
+                    f"{reason} triggered: {symbol} @ ${price:.2f} {comparator} ${trigger:.2f} ({strategy_type})",
+                    level="warning" if exit_status == "stopped_out" else "info"
                 )
                 execute_exit(
                     trade_id, price,
-                    reason=f"Stop-loss @ ${stop_loss:.2f}",
-                    status="stopped_out",
+                    reason=reason,
+                    status=exit_status,
                     intraday_df=exit_intraday_df,
                     daily_df=exit_daily_df,
                 )
-                alert_stop_loss(symbol, strategy_type, price, stop_loss)
-                continue
-
-            # Check take-profit (day trades only)
-            if take_profit and side == "buy" and price >= take_profit:
-                log_heartbeat(
-                    f"TAKE-PROFIT triggered: {symbol} @ ${price:.2f} >= ${take_profit:.2f} ({strategy_type})",
-                    level="info"
-                )
-                execute_exit(
-                    trade_id, price,
-                    reason=f"Take-profit @ ${take_profit:.2f}",
-                    status="closed",
-                    intraday_df=exit_intraday_df,
-                    daily_df=exit_daily_df,
-                )
+                if exit_status == "stopped_out":
+                    alert_stop_loss(symbol, strategy_type, price, stop_loss)
 
     _run_with_retry("stop_loss_monitor", _do_monitor)
 

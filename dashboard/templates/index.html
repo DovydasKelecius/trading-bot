@@ -94,11 +94,21 @@
             <h1 class="text-base md:text-lg font-bold">Trading Bot</h1>
             <span id="market-status" class="hidden md:inline text-sm px-2 py-1 rounded bg-dark-700"></span>
         </div>
+        <nav class="hidden sm:flex rounded-lg overflow-hidden border border-dark-600">
+            <a href="/" class="px-3 py-1.5 bg-blue-600 font-semibold">Dashboard</a>
+            <a href="/settings" class="px-3 py-1.5 bg-dark-700 hover:bg-dark-600">Settings</a>
+            <a href="/experiments" class="px-3 py-1.5 bg-dark-700 hover:bg-dark-600">Learn & Test</a>
+        </nav>
         <div class="flex items-center gap-2 md:gap-4 text-sm">
             <span id="clock-et" class="font-mono text-gray-300 text-xs md:text-sm"></span>
             <button id="toggle-trading-btn" onclick="toggleTrading()" class="px-3 py-1.5 rounded text-xs font-bold min-h-[36px]"></button>
         </div>
     </div>
+    <nav class="sm:hidden flex mt-2 rounded-lg overflow-hidden border border-dark-600 text-xs">
+        <a href="/" class="flex-1 text-center px-2 py-2 bg-blue-600 font-semibold">Dashboard</a>
+        <a href="/settings" class="flex-1 text-center px-2 py-2 bg-dark-700">Settings</a>
+        <a href="/experiments" class="flex-1 text-center px-2 py-2 bg-dark-700">Learn & Test</a>
+    </nav>
     <div class="flex items-center justify-between mt-1.5 md:mt-0 text-xs text-gray-500">
         <div class="flex items-center gap-3">
             <span id="market-status-mobile" class="md:hidden text-xs px-2 py-0.5 rounded bg-dark-700"></span>
