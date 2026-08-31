@@ -6,6 +6,7 @@ Serves the HTML dashboard and all JSON API endpoints.
 import logging
 import asyncio
 from datetime import datetime, date
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, Request, Query
@@ -23,7 +24,9 @@ import config
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-templates = Jinja2Templates(directory="dashboard/templates")
+# Absolute path ensures reliable template loading in WSL / cross-platform environments.
+_TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
+templates = Jinja2Templates(directory=str(_TEMPLATES_DIR))
 
 # Reference to the scheduler (set from main.py)
 _scheduler = None
@@ -45,8 +48,7 @@ def set_scheduler(scheduler):
 @router.get("/", response_class=HTMLResponse)
 async def dashboard(request: Request):
     """Render the main dashboard HTML page."""
-    return templates.TemplateResponse("index.html", {
-        "request": request,
+    return templates.TemplateResponse(request, "index.html", {
         "poll_interval": config.DASHBOARD_POLL_INTERVAL_MS,
         "chart_refresh": config.CHART_REFRESH_INTERVAL_MS,
     })

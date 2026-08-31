@@ -135,15 +135,26 @@ def get_account() -> Optional[Dict[str, Any]]:
         return None
     try:
         account = _retry_on_rate_limit(client.get_account)
+
+        def _safe_float(val, default: float = 0.0) -> float:
+            """Convert account field to float, returning default if None."""
+            if val is None:
+                return default
+            try:
+                return float(val)
+            except (TypeError, ValueError):
+                logger.debug(f"Could not convert account field {val!r} to float — using {default}")
+                return default
+
         result = {
-            "equity": float(account.equity),
-            "cash": float(account.cash),
-            "buying_power": float(account.buying_power),
-            "daytrading_buying_power": float(account.daytrading_buying_power),
-            "regt_buying_power": float(account.regt_buying_power),
+            "equity": _safe_float(account.equity),
+            "cash": _safe_float(account.cash),
+            "buying_power": _safe_float(account.buying_power),
+            "daytrading_buying_power": _safe_float(account.daytrading_buying_power),
+            "regt_buying_power": _safe_float(account.regt_buying_power),
             "status": account.status.value if hasattr(account.status, 'value') else str(account.status),
             "currency": account.currency,
-            "last_equity": float(account.last_equity),
+            "last_equity": _safe_float(account.last_equity),
         }
         _set_cache("account", result)
         return result

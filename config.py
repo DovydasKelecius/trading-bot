@@ -46,21 +46,94 @@ DAY_REQUIRE_ABOVE_SMA50 = True # Require price to be above daily SMA50
 DAY_MIN_DAILY_BARS = 20        # Minimum daily bars needed (for indicator quality)
 DAY_MAX_HOLD_DAYS = 3          # NEW: Hold up to 3 days instead of EOD liquidation (was 1)
 
-# --- Swing Trade Settings (AGGRESSIVE) ---
+# --- Swing Trade Settings (Structure-Based Strategy — Long & Short) ---
 SWING_MAX_POSITIONS = 10
-SWING_STOP_MULTIPLIER = 3.0    # ATR trailing stop — wider for big runners (was 2.0)
-SWING_POSITION_SIZE_REDUCTION = 0.0  # No reduction — trailing stop manages risk (was 0.30)
-SWING_SMA_FAST = 50
-SWING_SMA_SLOW = 200
-SWING_SMA_ADAPTIVE_FAST = 20   # NEW: Fallback fast SMA when SMA200 unavailable
-SWING_SMA_ADAPTIVE_SLOW = 50   # NEW: Fallback slow SMA when SMA200 unavailable
-SWING_RSI_OVERSOLD = 40        # Mild pullback entry, not extreme oversold (was 30)
-SWING_USE_PULLBACK_ENTRY = True     # NEW: Buy dip to SMA50 in confirmed uptrend
-SWING_USE_SUSTAINED_UPTREND = True  # NEW: Re-enter strong uptrends after 5+ day confirmation
-SWING_USE_ADAPTIVE_MA = True        # NEW: Use SMA20/50 when SMA200 not available
-SWING_RATCHET_ENABLED = True        # NEW: Tighten trailing stop from 3x to 2x ATR at +20% gain
-SWING_RATCHET_THRESHOLD = 0.20      # NEW: Gain threshold to trigger ratchet
-SWING_RATCHET_STOP_MULTIPLIER = 2.0 # NEW: Tighter stop multiplier after ratchet triggers
+
+# ── Moving Averages ────────────────────────────────────────────────────────
+SWING_EMA_FAST = 9           # Fast EMA — short-term momentum signal
+SWING_EMA_SLOW = 21          # Slow EMA — bias confirmation (above = bullish, below = bearish)
+SWING_SMA_FAST = 50          # SMA50 — primary bias filter and support/resistance
+SWING_SMA_SLOW = 200         # SMA200 — macro trend confirmation
+SWING_SMA_ADAPTIVE_FAST = 20 # Fallback fast SMA when SMA200 unavailable
+SWING_SMA_ADAPTIVE_SLOW = 50 # Fallback slow SMA when SMA200 unavailable
+SWING_USE_ADAPTIVE_MA = True # Use SMA20/50 when SMA200 not available (new stocks)
+
+# ── Risk / Stops ───────────────────────────────────────────────────────────
+SWING_STOP_MULTIPLIER = 2.0  # ATR multiplier for structure-based stop placement
+SWING_PROFIT_R_MIN = 2.0     # Minimum risk-reward ratio for take-profit (2R)
+SWING_PROFIT_R_MAX = 3.0     # Target take-profit at 3R
+SWING_POSITION_SIZE_REDUCTION = 0.0  # No size reduction (trailing stop manages risk)
+
+# ── Ratchet Trailing Stop ──────────────────────────────────────────────────
+SWING_RATCHET_ENABLED = True          # Tighten stop after significant gain
+SWING_RATCHET_THRESHOLD = 0.20        # Gain % to trigger ratchet (20%)
+SWING_RATCHET_STOP_MULTIPLIER = 1.5   # Tighter ATR multiplier after ratchet
+
+# ── Structure Detection ────────────────────────────────────────────────────
+# How many recent daily bars to scan when looking for a swing high/low
+SWING_STRUCTURE_LOOKBACK = 20
+
+# "Near support/resistance" tolerance: price within this % of the level triggers
+# the structure proximity check. 2% means within 2% of the SMA50 or swing level.
+SWING_PROXIMITY_PCT = 0.02
+
+# ── Retest Protection — Long Entries ──────────────────────────────────────
+# These filters prevent entering a long just because price touched support again
+# without showing any evidence of actual buying pressure.
+#
+# To make entries MORE aggressive (more trades, higher false-positive rate):
+#   - Increase SWING_RETEST_MIN_WICK_PCT (accept smaller wicks)
+#   - Set SWING_RETEST_REQUIRE_CLOSE_ABOVE = False
+#   - Set SWING_RETEST_REQUIRE_HIGHER_LOW = False
+#
+# To make entries MORE conservative (fewer trades, cleaner setups):
+#   - Decrease SWING_RETEST_MIN_WICK_PCT (require larger rejection wicks)
+#   - Set SWING_RETEST_REQUIRE_CLOSE_ABOVE = True
+#   - Set SWING_RETEST_REQUIRE_HIGHER_LOW = True
+
+# Minimum lower-wick size as a fraction of the daily range.
+# A candle with a 30% wick means the low pierced support but closed well above it.
+# 0.0 = disabled (accept any close above support, no wick needed)
+# 0.25 = require wick to be at least 25% of high-low range
+SWING_RETEST_MIN_WICK_PCT_LONG = 0.25
+
+# Require that the close is above the support level (not just a touch)
+# True = candle must close above the SMA50/swing low — mandatory for clean longs
+SWING_RETEST_REQUIRE_CLOSE_ABOVE_SUPPORT = True
+
+# Require a higher low vs the previous bar (short-term momentum flip)
+# True = current low must be above previous bar's low (price is being supported)
+SWING_RETEST_REQUIRE_HIGHER_LOW = False
+
+# Require volume to be at least N× the 20-period average on the rejection candle
+# 0.0 = disabled. 1.2 = require 20% above avg volume (buying pressure confirmation)
+SWING_RETEST_VOLUME_MULTIPLIER_LONG = 0.0
+
+# ── Retest Protection — Short Entries ─────────────────────────────────────
+# Mirror of the above for short setups: these filter out simple resistance touches
+# that haven't shown actual selling pressure (rejection).
+
+# Minimum upper-wick size as fraction of daily range (sellers pushed price back down)
+# 0.0 = disabled. 0.25 = require upper wick >= 25% of high-low range
+SWING_RETEST_MIN_WICK_PCT_SHORT = 0.25
+
+# Require close to be BELOW the resistance level (failed to break through)
+SWING_RETEST_REQUIRE_CLOSE_BELOW_RESISTANCE = True
+
+# Require a lower high vs the previous bar (short-term rejection pattern)
+SWING_RETEST_REQUIRE_LOWER_HIGH = False
+
+# Volume confirmation for short rejection candles
+# 0.0 = disabled. 1.2 = require 20% above avg volume on rejection bar
+SWING_RETEST_VOLUME_MULTIPLIER_SHORT = 0.0
+
+# ── RSI Filters ────────────────────────────────────────────────────────────
+# For longs: RSI must be in a "dip" zone — not overbought, not yet recovering
+SWING_RSI_LONG_MAX = 55   # Don't enter long if RSI is already high (>55 = extended)
+SWING_RSI_LONG_MIN = 20   # Don't enter if RSI is catastrophically oversold (<20 = crash)
+# For shorts: RSI must be in a "peak" zone — not oversold, not yet falling
+SWING_RSI_SHORT_MIN = 45  # Don't enter short if RSI is already low (<45 = extended down)
+SWING_RSI_SHORT_MAX = 80  # Don't enter short if RSI is wildly overbought (>80 = squeeze risk)
 
 # --- Risk Management (AGGRESSIVE) ---
 MAX_RISK_PER_TRADE = 0.04      # 4% of portfolio per trade (was 1% — 4x increase)

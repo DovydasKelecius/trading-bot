@@ -54,6 +54,11 @@ def _calc_sma(series: pd.Series, period: int) -> pd.Series:
     return series.rolling(window=period, min_periods=period).mean()
 
 
+def _calc_ema(series: pd.Series, period: int) -> pd.Series:
+    """Calculate Exponential Moving Average."""
+    return series.ewm(span=period, adjust=False).mean()
+
+
 # ─── Caching ───
 
 def _cache_key(symbol: str, timeframe: str) -> str:
@@ -140,8 +145,11 @@ def compute_indicators(df: pd.DataFrame, include_sma: bool = False,
         typical_price = (df["high"] + df["low"] + df["close"]) / 3
         df["vwap"] = (typical_price * df["volume"]).cumsum() / df["volume"].cumsum()
 
-    # SMAs for swing trade analysis
+    # SMAs and EMAs for swing trade analysis
     if include_sma:
+        from config import SWING_EMA_FAST, SWING_EMA_SLOW
+        df[f"ema_{SWING_EMA_FAST}"] = _calc_ema(df["close"], period=SWING_EMA_FAST)
+        df[f"ema_{SWING_EMA_SLOW}"] = _calc_ema(df["close"], period=SWING_EMA_SLOW)
         df[f"sma_{SWING_SMA_ADAPTIVE_FAST}"] = _calc_sma(df["close"], period=SWING_SMA_ADAPTIVE_FAST)
         df[f"sma_{SWING_SMA_FAST}"] = _calc_sma(df["close"], period=SWING_SMA_FAST)
         df[f"sma_{SWING_SMA_SLOW}"] = _calc_sma(df["close"], period=SWING_SMA_SLOW)

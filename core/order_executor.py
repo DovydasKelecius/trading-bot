@@ -102,8 +102,15 @@ def execute_entry(symbol: str, strategy_type: str, signal: Dict[str, Any],
         logger.warning(f"[{symbol}] Invalid signal data: price={entry_price}, atr={atr}")
         return None
 
+    # Determine side based on signal
+    side = "sell" if signal.get("signal") == "short" else "buy"
+
     # Calculate position size (with position value cap)
-    shares = calculate_position_size(portfolio_equity, atr, strategy_type, entry_price=entry_price)
+    shares = calculate_position_size(
+        portfolio_equity, atr, strategy_type, 
+        entry_price=entry_price, 
+        stop_loss=signal.get("stop_loss")
+    )
     if shares <= 0:
         logger.warning(f"[{symbol}] Position size is 0 — skipping")
         log_rejected_trade(
@@ -137,14 +144,14 @@ def execute_entry(symbol: str, strategy_type: str, signal: Dict[str, Any],
 
     # Check trading mode
     if not config.ENABLE_TRADING:
-        stop_loss = calculate_stop_loss(entry_price, atr, strategy_type)
-        take_profit = calculate_take_profit(entry_price, atr, strategy_type)
+        stop_loss = signal.get("stop_loss") or calculate_stop_loss(entry_price, atr, strategy_type, side)
+        take_profit = signal.get("take_profit") or calculate_take_profit(entry_price, atr, strategy_type, side)
         logger.info(
-            f"MONITOR MODE — order not placed: BUY {shares} {symbol} @ ~${entry_price:.2f} "
+            f"MONITOR MODE — order not placed: {side.upper()} {shares} {symbol} @ ~${entry_price:.2f} "
             f"({strategy_type}), SL=${stop_loss:.2f}, TP={take_profit}"
         )
         log_heartbeat(
-            f"MONITOR MODE — would buy {shares} {symbol} @ ~${entry_price:.2f} ({strategy_type})",
+            f"MONITOR MODE — would {side} {shares} {symbol} @ ~${entry_price:.2f} ({strategy_type})",
             level="info",
             event_type="order",
             detail={"symbol": symbol, "strategy": strategy_type, "shares": shares,
@@ -154,13 +161,13 @@ def execute_entry(symbol: str, strategy_type: str, signal: Dict[str, Any],
         return None
 
     # ── Step 1: Submit order to Alpaca ────────────────────────────────
-    order_id = alpaca_client.submit_market_order(symbol, shares, "buy")
+    order_id = alpaca_client.submit_market_order(symbol, shares, side)
     if not order_id:
-        log_heartbeat(f"Failed to submit buy order for {symbol}", level="error")
+        log_heartbeat(f"Failed to submit {side} order for {symbol}", level="error")
         return None
 
     log_heartbeat(
-        f"Order submitted for {symbol}: BUY {shares} shares @ ~${entry_price:.2f} — waiting for fill...",
+        f"Order submitted for {symbol}: {side.upper()} {shares} shares @ ~${entry_price:.2f} — waiting for fill...",
         level="info",
         event_type="order",
         detail={"symbol": symbol, "strategy": strategy_type, "shares": shares,
@@ -193,15 +200,15 @@ def execute_entry(symbol: str, strategy_type: str, signal: Dict[str, Any],
     actual_qty = fill_details["filled_qty"] or shares
 
     # Recalculate stops using the ACTUAL fill price (not the signal price)
-    stop_loss = calculate_stop_loss(actual_fill_price, atr, strategy_type)
-    take_profit = calculate_take_profit(actual_fill_price, atr, strategy_type)
+    stop_loss = signal.get("stop_loss") or calculate_stop_loss(actual_fill_price, atr, strategy_type, side)
+    take_profit = signal.get("take_profit") or calculate_take_profit(actual_fill_price, atr, strategy_type, side)
 
     # ── Step 4: Record confirmed trade in database ────────────────────
     with get_db() as session:
         trade = Trade(
             symbol=symbol,
             strategy_type=strategy_type,
-            side="buy",
+            side=side,
             quantity=actual_qty,
             entry_price=actual_fill_price,
             stop_loss=stop_loss,

@@ -479,9 +479,9 @@ def swing_trade_scan():
             "scan_timestamp_utc": datetime.utcnow().isoformat(),
         }
 
-        # Execute buy signals
-        buys = [s for s in signals if s["signal"] == "buy"]
-        for signal in buys:
+        # Execute entries (buy & short)
+        entries = [s for s in signals if s["signal"] in ("buy", "short")]
+        for signal in entries:
             # Gather sentiment data for logging
             sentiment_data = None
             if config.ENABLE_SENTIMENT:
@@ -515,9 +515,9 @@ def swing_trade_scan():
                         if new_stop:
                             trade.stop_loss = new_stop
 
-        # Check for sell signals on open positions
-        sells = [s for s in signals if s["signal"] == "sell"]
-        for signal in sells:
+        # Check for sell/cover signals on open positions
+        exits = [s for s in signals if s["signal"] in ("exit_long", "exit_short")]
+        for signal in exits:
             with get_db() as session:
                 open_trade = session.query(Trade).filter(
                     Trade.symbol == signal["symbol"],
@@ -525,13 +525,18 @@ def swing_trade_scan():
                     Trade.status == "open"
                 ).first()
                 if open_trade:
-                    execute_exit(
-                        open_trade.id,
-                        signal["entry_price"],
-                        reason=signal["reason"],
-                        status="closed",
-                        daily_df=daily_cache.get(signal["symbol"]),
-                    )
+                    # Match side to exit direction
+                    is_long_exit = open_trade.side == "buy" and signal["signal"] == "exit_long"
+                    is_short_exit = open_trade.side == "sell" and signal["signal"] == "exit_short"
+                    
+                    if is_long_exit or is_short_exit:
+                        execute_exit(
+                            open_trade.id,
+                            signal["entry_price"],
+                            reason=signal["reason"],
+                            status="closed",
+                            daily_df=daily_cache.get(signal["symbol"]),
+                        )
 
         log_heartbeat(
             f"Swing scan complete: {len(signals)} symbols, "

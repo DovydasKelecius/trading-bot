@@ -10,6 +10,7 @@ Dashboard:
 """
 
 import logging
+from contextlib import asynccontextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.events import EVENT_JOB_ERROR
 from fastapi import FastAPI
@@ -31,10 +32,6 @@ from utils.logger import setup_logging
 setup_logging()
 logger = logging.getLogger(__name__)
 
-# Create FastAPI app
-app = FastAPI(title="Trading Bot", docs_url="/docs", redoc_url=None)
-app.include_router(dashboard_router)
-
 # Create scheduler (BackgroundScheduler runs jobs in threads — no event loop required)
 scheduler = BackgroundScheduler(timezone="US/Eastern")
 
@@ -51,9 +48,10 @@ def job_error_listener(event):
         pass
 
 
-@app.on_event("startup")
-async def startup():
-    """Initialize database, configure scheduler, and start all jobs."""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Initialize database and scheduler on startup; shut down gracefully on exit."""
+    # ── Startup ──────────────────────────────────────────────────────────────
     init_db()
     log_heartbeat("Bot starting up...", level="info")
 
@@ -110,13 +108,17 @@ async def startup():
     logger.info(f"Scheduler started with {job_count} jobs")
     log_heartbeat(f"Bot online — scheduler running with {job_count} jobs", level="info")
 
+    yield  # Application is running
 
-@app.on_event("shutdown")
-async def shutdown():
-    """Gracefully shut down the scheduler."""
+    # ── Shutdown ─────────────────────────────────────────────────────────────
     logger.info("Shutting down scheduler...")
     scheduler.shutdown(wait=False)
     log_heartbeat("Bot shutting down", level="warning")
+
+
+# Create FastAPI app with lifespan handler (replaces deprecated @app.on_event)
+app = FastAPI(title="Trading Bot", docs_url="/docs", redoc_url=None, lifespan=lifespan)
+app.include_router(dashboard_router)
 
 
 if __name__ == "__main__":

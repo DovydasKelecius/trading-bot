@@ -37,28 +37,40 @@ logger = logging.getLogger(__name__)
 
 def calculate_position_size(portfolio_equity: float, atr: float,
                             strategy_type: str, entry_price: float = 0.0,
-                            allocation_pct: Optional[float] = None) -> int:
+                            allocation_pct: Optional[float] = None,
+                            stop_loss: Optional[float] = None) -> int:
     """
-    Calculate number of shares to trade based on ATR risk sizing,
+    Calculate number of shares to trade based on risk sizing,
     capped by maximum position value (% of equity).
 
-    Formula: shares = risk_amount / (ATR * stop_multiplier)
+    Formula: shares = risk_amount / risk_per_share
     Where: risk_amount = portfolio_equity * MAX_RISK_PER_TRADE * allocation_pct
 
     The result is then capped so total position cost never exceeds
     MAX_POSITION_VALUE_PCT of portfolio equity.
     """
-    if atr <= 0 or portfolio_equity <= 0:
-        logger.warning(f"Invalid inputs: equity={portfolio_equity}, atr={atr}")
+    if portfolio_equity <= 0:
+        logger.warning(f"Invalid inputs: equity={portfolio_equity}")
         return 0
 
     if allocation_pct is None:
         allocation_pct = DAY_TRADE_ALLOCATION if strategy_type == "day" else SWING_TRADE_ALLOCATION
 
-    stop_multiplier = DAY_STOP_MULTIPLIER if strategy_type == "day" else SWING_STOP_MULTIPLIER
     risk_amount = portfolio_equity * MAX_RISK_PER_TRADE * allocation_pct
 
-    shares = risk_amount / (atr * stop_multiplier)
+    # Determine risk per share
+    if stop_loss is not None and entry_price > 0:
+        risk_per_share = abs(entry_price - stop_loss)
+        if risk_per_share == 0:
+            risk_per_share = 0.01  # Prevent division by zero
+    else:
+        if atr <= 0:
+            logger.warning(f"Invalid inputs: atr={atr} and no stop_loss provided")
+            return 0
+        stop_multiplier = DAY_STOP_MULTIPLIER if strategy_type == "day" else SWING_STOP_MULTIPLIER
+        risk_per_share = atr * stop_multiplier
+
+    shares = risk_amount / risk_per_share
 
     # Swing size reduction (now 0% in aggressive config -- no reduction)
     if strategy_type == "swing":
@@ -189,36 +201,45 @@ def pre_trade_check(symbol: str, strategy_type: str, shares: int,
 def update_trailing_stop(trade: Trade, current_price: float, atr: float) -> Optional[float]:
     """
     Update trailing stop for swing trades with ratchet mechanism.
-    Only moves stop up (for long positions), never down.
+    Only moves stop up for longs, and down for shorts.
 
     Ratchet: Once the trade is up +20% from entry, the trailing stop tightens
-    from 3x ATR to 2x ATR to protect accumulated gains.
+    from 3x ATR to tighter to protect accumulated gains.
 
     Returns:
         New stop-loss price if updated, None if no change
     """
-    if trade.side != "buy":
-        return None
-
     # Determine which stop multiplier to use
-    stop_mult = SWING_STOP_MULTIPLIER  # Default: 3x ATR
+    stop_mult = SWING_STOP_MULTIPLIER  # Default
 
     if SWING_RATCHET_ENABLED and trade.entry_price > 0:
-        gain_pct = (current_price - trade.entry_price) / trade.entry_price
+        if trade.side == "buy":
+            gain_pct = (current_price - trade.entry_price) / trade.entry_price
+        else:
+            gain_pct = (trade.entry_price - current_price) / trade.entry_price
+            
         if gain_pct >= SWING_RATCHET_THRESHOLD:
-            stop_mult = SWING_RATCHET_STOP_MULTIPLIER  # Tighter: 2x ATR
+            stop_mult = SWING_RATCHET_STOP_MULTIPLIER
             logger.debug(
                 f"[{trade.symbol}] Ratchet active: gain {gain_pct*100:.1f}% >= "
                 f"{SWING_RATCHET_THRESHOLD*100:.0f}%, using {stop_mult}x ATR stop"
             )
 
-    new_stop = round(current_price - (atr * stop_mult), 2)
-
-    if new_stop > trade.stop_loss:
-        logger.info(
-            f"[{trade.symbol}] Trailing stop updated: ${trade.stop_loss:.2f} -> ${new_stop:.2f} "
-            f"(mult={stop_mult}x ATR)"
-        )
-        return new_stop
+    if trade.side == "buy":
+        new_stop = round(current_price - (atr * stop_mult), 2)
+        if new_stop > trade.stop_loss:
+            logger.info(
+                f"[{trade.symbol}] Trailing stop updated: ${trade.stop_loss:.2f} -> ${new_stop:.2f} "
+                f"(mult={stop_mult}x ATR)"
+            )
+            return new_stop
+    else:  # short
+        new_stop = round(current_price + (atr * stop_mult), 2)
+        if new_stop < trade.stop_loss and trade.stop_loss > 0:
+            logger.info(
+                f"[{trade.symbol}] Trailing stop updated (short): ${trade.stop_loss:.2f} -> ${new_stop:.2f} "
+                f"(mult={stop_mult}x ATR)"
+            )
+            return new_stop
 
     return None
